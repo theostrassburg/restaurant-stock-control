@@ -11,13 +11,8 @@ import {
   Boxes,
   ChefHat,
   ChevronRight,
-  CircleUser,
-  CreditCard,
-  Download,
-  Eye,
   Lock,
   Moon,
-  Plus,
   Search,
   ShieldCheck,
   ShoppingCart,
@@ -121,6 +116,15 @@ const STORAGE_KEYS = {
   theme: 'restaurant-stock-theme'
 };
 
+const EMPTY_PRODUCT_FORM = {
+  name: '',
+  category: 'Vleis' as CategoryKey,
+  quantity: 0,
+  unit: 'kg',
+  reorderLevel: 0,
+  location: ''
+};
+
 function generateId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -137,7 +141,9 @@ export default function RestaurantStockApp() {
   const [stocktakes, setStocktakes] = useState<StocktakeEntry[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<CategoryKey>('Vleis');
   const [showStocktakeModal, setShowStocktakeModal] = useState(false);
+  const [showAddProductModal, setShowAddProductModal] = useState(false);
   const [newMember, setNewMember] = useState({ name: '', role: 'Stock Controller' as UserRecord['role'], userId: '' });
+  const [productForm, setProductForm] = useState(EMPTY_PRODUCT_FORM);
   const [stocktakeDraft, setStocktakeDraft] = useState<Record<string, number>>({});
   const [search, setSearch] = useState('');
 
@@ -153,18 +159,10 @@ export default function RestaurantStockApp() {
     setDarkMode(resolvedDark);
     document.documentElement.classList.toggle('dark', resolvedDark);
 
-    if (storedUsers) {
-      setUsers(JSON.parse(storedUsers));
-    }
-    if (storedProducts) {
-      setProducts(JSON.parse(storedProducts));
-    }
-    if (storedHistory) {
-      setLoginHistory(JSON.parse(storedHistory));
-    }
-    if (storedStocktakes) {
-      setStocktakes(JSON.parse(storedStocktakes));
-    }
+    if (storedUsers) setUsers(JSON.parse(storedUsers));
+    if (storedProducts) setProducts(JSON.parse(storedProducts));
+    if (storedHistory) setLoginHistory(JSON.parse(storedHistory));
+    if (storedStocktakes) setStocktakes(JSON.parse(storedStocktakes));
     if (savedUser) {
       setAuthUser(JSON.parse(savedUser));
       setIsLogin(false);
@@ -200,10 +198,15 @@ export default function RestaurantStockApp() {
     }
   }, [authUser]);
 
+  useEffect(() => {
+    setProductForm((prev) => ({ ...prev, category: selectedCategory }));
+  }, [selectedCategory]);
+
   const summaryCards = useMemo(() => {
     const totalItems = products.length;
     const lowStock = products.filter((p) => p.quantity <= p.reorderLevel).length;
     const totalUnits = products.reduce((sum, p) => sum + p.quantity, 0);
+
     return [
       { label: 'Products tracked', value: totalItems.toString(), icon: Boxes, tone: 'text-amber-500' },
       { label: 'Low stock', value: lowStock.toString(), icon: AlertTriangle, tone: 'text-red-500' },
@@ -212,18 +215,28 @@ export default function RestaurantStockApp() {
     ];
   }, [products, stocktakes]);
 
-  const categoryProducts = useMemo(() => {
-    return products.filter((p) => p.category === selectedCategory);
-  }, [products, selectedCategory]);
+  const categoryProducts = useMemo(
+    () => products.filter((product) => product.category === selectedCategory),
+    [products, selectedCategory]
+  );
 
-  const filteredProducts = useMemo(() => {
-    return products.filter((p) =>
-      p.category.includes(search) || p.name.toLowerCase().includes(search.toLowerCase())
-    );
-  }, [products, search]);
+  const visibleProducts = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return categoryProducts;
+
+    return categoryProducts.filter((product) => {
+      return (
+        product.name.toLowerCase().includes(query) ||
+        product.location.toLowerCase().includes(query) ||
+        product.unit.toLowerCase().includes(query)
+      );
+    });
+  }, [categoryProducts, search]);
+
+  const isAdmin = authUser?.role === 'Admin';
 
   const handleLogin = () => {
-    const match = users.find((u) => u.id === loginId.trim() && u.password === password.trim());
+    const match = users.find((user) => user.id === loginId.trim() && user.password === password.trim());
 
     if (!match) {
       alert('Invalid user ID or password');
@@ -252,31 +265,54 @@ export default function RestaurantStockApp() {
 
   const updateProductQuantity = (productId: string, delta: number) => {
     setProducts((prev) =>
-      prev.map((p) => {
-        if (p.id !== productId) return p;
-        const next = Math.max(0, p.quantity + delta);
-        return { ...p, quantity: next, lastUpdated: new Date().toISOString().slice(0, 10) };
+      prev.map((product) => {
+        if (product.id !== productId) return product;
+        const next = Math.max(0, product.quantity + delta);
+        return { ...product, quantity: next, lastUpdated: new Date().toISOString().slice(0, 10) };
       })
     );
   };
 
+  const handleCreateProduct = () => {
+    if (!productForm.name.trim()) {
+      alert('Product name is required');
+      return;
+    }
+
+    const createdProduct: Product = {
+      id: generateId('product'),
+      name: productForm.name.trim(),
+      category: productForm.category,
+      quantity: Number(productForm.quantity) || 0,
+      unit: productForm.unit.trim() || 'units',
+      reorderLevel: Number(productForm.reorderLevel) || 0,
+      location: productForm.location.trim() || 'Unassigned',
+      lastUpdated: new Date().toISOString().slice(0, 10)
+    };
+
+    setProducts((prev) => [createdProduct, ...prev]);
+    setShowAddProductModal(false);
+    setProductForm({
+      ...EMPTY_PRODUCT_FORM,
+      category: selectedCategory
+    });
+  };
+
   const openStocktake = () => {
-    const startValues = Object.fromEntries(
-      categoryProducts.map((p) => [p.id, p.quantity])
-    );
+    const startValues = Object.fromEntries(categoryProducts.map((product) => [product.id, product.quantity]));
     setStocktakeDraft(startValues);
     setShowStocktakeModal(true);
   };
 
   const saveStocktake = () => {
-    const snapshot = categoryProducts.map((p) => {
-      const counted = Number(stocktakeDraft[p.id] ?? p.quantity);
+    const snapshot = categoryProducts.map((product) => {
+      const counted = Number(stocktakeDraft[product.id] ?? product.quantity);
       return {
-        id: p.id,
-        name: p.name,
+        id: product.id,
+        name: product.name,
         countedQty: counted,
-        systemQty: p.quantity,
-        difference: counted - p.quantity
+        systemQty: product.quantity,
+        difference: counted - product.quantity
       };
     });
 
@@ -384,7 +420,7 @@ export default function RestaurantStockApp() {
                     <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">User ID</label>
                     <input
                       value={loginId}
-                      onChange={(e) => setLoginId(e.target.value)}
+                      onChange={(event) => setLoginId(event.target.value)}
                       className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                       placeholder="ADM001"
                     />
@@ -395,7 +431,7 @@ export default function RestaurantStockApp() {
                     <input
                       type="password"
                       value={password}
-                      onChange={(e) => setPassword(e.target.value)}
+                      onChange={(event) => setPassword(event.target.value)}
                       className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none transition focus:border-amber-400 focus:ring-2 focus:ring-amber-100 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                       placeholder="••••••••"
                     />
@@ -445,7 +481,7 @@ export default function RestaurantStockApp() {
               <Search size={15} className="text-slate-400" />
               <input
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(event) => setSearch(event.target.value)}
                 placeholder="Search products"
                 className="w-40 bg-transparent outline-none placeholder:text-slate-400"
               />
@@ -495,8 +531,8 @@ export default function RestaurantStockApp() {
 
             <div className="dashboard-grid">
               {CATEGORIES.map((category) => {
-                const count = products.filter((p) => p.category === category).length;
-                const low = products.filter((p) => p.category === category && p.quantity <= p.reorderLevel).length;
+                const count = products.filter((product) => product.category === category).length;
+                const low = products.filter((product) => product.category === category && product.quantity <= product.reorderLevel).length;
                 const active = category === selectedCategory;
                 return (
                   <button
@@ -559,6 +595,12 @@ export default function RestaurantStockApp() {
 
             <div className="flex items-center gap-2">
               <button
+                onClick={() => setShowAddProductModal(true)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              >
+                Add Product
+              </button>
+              <button
                 onClick={openStocktake}
                 className="rounded-xl bg-amber-500 px-4 py-2.5 font-semibold text-slate-900 transition hover:bg-amber-400"
               >
@@ -579,7 +621,7 @@ export default function RestaurantStockApp() {
                 </tr>
               </thead>
               <tbody>
-                {categoryProducts.map((product) => (
+                {visibleProducts.map((product) => (
                   <tr key={product.id} className="border-t border-slate-200 dark:border-slate-700">
                     <td className="p-4">
                       <div className="font-semibold">{product.name}</div>
@@ -627,39 +669,47 @@ export default function RestaurantStockApp() {
               </div>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">Staff name</label>
-                <input
-                  value={newMember.name}
-                  onChange={(e) => setNewMember((prev) => ({ ...prev, name: e.target.value }))}
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 outline-none focus:border-amber-400 dark:border-slate-700 dark:bg-slate-800"
-                  placeholder="Jane Smith"
-                />
-              </div>
-              <div>
-                <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">Role</label>
-                <select
-                  value={newMember.role}
-                  onChange={(e) => setNewMember((prev) => ({ ...prev, role: e.target.value as UserRecord['role'] }))}
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 outline-none focus:border-amber-400 dark:border-slate-700 dark:bg-slate-800"
-                >
-                  <option>Admin</option>
-                  <option>Manager</option>
-                  <option>Stock Controller</option>
-                  <option>Supervisor</option>
-                </select>
-              </div>
-            </div>
+            {isAdmin ? (
+              <>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">Staff name</label>
+                    <input
+                      value={newMember.name}
+                      onChange={(event) => setNewMember((prev) => ({ ...prev, name: event.target.value }))}
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 outline-none focus:border-amber-400 dark:border-slate-700 dark:bg-slate-800"
+                      placeholder="Jane Smith"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">Role</label>
+                    <select
+                      value={newMember.role}
+                      onChange={(event) => setNewMember((prev) => ({ ...prev, role: event.target.value as UserRecord['role'] }))}
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 outline-none focus:border-amber-400 dark:border-slate-700 dark:bg-slate-800"
+                    >
+                      <option>Admin</option>
+                      <option>Manager</option>
+                      <option>Stock Controller</option>
+                      <option>Supervisor</option>
+                    </select>
+                  </div>
+                </div>
 
-            <div className="mt-4 flex gap-3">
-              <button
-                onClick={addUser}
-                className="flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 font-medium text-white transition hover:bg-slate-800 dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400"
-              >
-                <UserPlus size={16} /> Add staff member
-              </button>
-            </div>
+                <div className="mt-4 flex gap-3">
+                  <button
+                    onClick={addUser}
+                    className="flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 font-medium text-white transition hover:bg-slate-800 dark:bg-amber-500 dark:text-slate-950 dark:hover:bg-amber-400"
+                  >
+                    <UserPlus size={16} /> Add staff member
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-300">
+                Only admins can create and manage user IDs and passwords.
+              </div>
+            )}
 
             <div className="mt-5 space-y-3">
               {users.map((member) => (
@@ -736,6 +786,96 @@ export default function RestaurantStockApp() {
         </section>
       </div>
 
+      {showAddProductModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-2xl rounded-[30px] bg-white p-6 shadow-2xl dark:bg-slate-900">
+            <div className="mb-5 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">New item</p>
+                <h3 className="text-2xl font-bold">Add product</h3>
+              </div>
+              <button onClick={() => setShowAddProductModal(false)} className="rounded-xl border border-slate-200 p-2 dark:border-slate-700">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="md:col-span-2">
+                <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">Product name</label>
+                <input
+                  value={productForm.name}
+                  onChange={(event) => setProductForm((prev) => ({ ...prev, name: event.target.value }))}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 outline-none focus:border-amber-400 dark:border-slate-700 dark:bg-slate-800"
+                  placeholder="Beef ribs"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">Category</label>
+                <select
+                  value={productForm.category}
+                  onChange={(event) => setProductForm((prev) => ({ ...prev, category: event.target.value as CategoryKey }))}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 outline-none focus:border-amber-400 dark:border-slate-700 dark:bg-slate-800"
+                >
+                  {CATEGORIES.map((category) => (
+                    <option key={category} value={category}>{category}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">Unit</label>
+                <input
+                  value={productForm.unit}
+                  onChange={(event) => setProductForm((prev) => ({ ...prev, unit: event.target.value }))}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 outline-none focus:border-amber-400 dark:border-slate-700 dark:bg-slate-800"
+                  placeholder="kg"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">Initial quantity</label>
+                <input
+                  type="number"
+                  value={productForm.quantity}
+                  onChange={(event) => setProductForm((prev) => ({ ...prev, quantity: Number(event.target.value) }))}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 outline-none focus:border-amber-400 dark:border-slate-700 dark:bg-slate-800"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">Reorder level</label>
+                <input
+                  type="number"
+                  value={productForm.reorderLevel}
+                  onChange={(event) => setProductForm((prev) => ({ ...prev, reorderLevel: Number(event.target.value) }))}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 outline-none focus:border-amber-400 dark:border-slate-700 dark:bg-slate-800"
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="mb-2 block text-sm font-medium text-slate-700 dark:text-slate-300">Storage location</label>
+                <input
+                  value={productForm.location}
+                  onChange={(event) => setProductForm((prev) => ({ ...prev, location: event.target.value }))}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 outline-none focus:border-amber-400 dark:border-slate-700 dark:bg-slate-800"
+                  placeholder="Freezer A1"
+                />
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button onClick={() => setShowAddProductModal(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200">
+                Cancel
+              </button>
+              <button onClick={handleCreateProduct} className="rounded-xl bg-amber-500 px-4 py-2.5 font-semibold text-slate-900">
+                Save product
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showStocktakeModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm">
           <div className="w-full max-w-3xl rounded-[30px] bg-white p-6 shadow-2xl dark:bg-slate-900">
@@ -759,10 +899,10 @@ export default function RestaurantStockApp() {
                   <input
                     type="number"
                     value={stocktakeDraft[product.id] ?? product.quantity}
-                    onChange={(e) =>
+                    onChange={(event) =>
                       setStocktakeDraft((prev) => ({
                         ...prev,
-                        [product.id]: Number(e.target.value)
+                        [product.id]: Number(event.target.value)
                       }))
                     }
                     className="w-24 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-right outline-none focus:border-amber-400 dark:border-slate-700 dark:bg-slate-800"
